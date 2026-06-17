@@ -11,5 +11,6 @@ wheels/
 
 .idea/
 .vscode/
+.DS_Store
 
 data/

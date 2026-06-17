@@ -1,6 +1,5 @@
 import torch
 from torch.utils.data import Dataset
-import random
 import h5py
 
 class TrainDataset(Dataset):

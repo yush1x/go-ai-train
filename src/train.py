@@ -3,14 +3,14 @@ from pathlib import Path
 from torch import nn
 from torch.utils.data import DataLoader
 
-from src.dataset import TrainDataset
-from src.model import GoNet
+from dataset import TrainDataset
+from model import GoNet
 import torch
 
 num_epochs = 1
 lr = 5e-4
-h5_path = Path("./data/games.h5")
-weights_path = Path("./data/weights/go_net2.pt")
+h5_path = Path("./data/supervised/Agon.h5")
+weights_path = Path("./data/weights/agon_go_net.pt")
 log_interval = 100
 value_weight = 1
 
@@ -22,7 +22,7 @@ elif torch.backends.mps.is_available():
 else:
     device = torch.device("cpu")
 
-model = GoNet(in_channels=4, channels=128, num_blocks=5, board_size=19).to(device)
+model = GoNet(in_channels=9, channels=128, num_blocks=5, board_size=19).to(device)
 criterion_policy = nn.CrossEntropyLoss()
 criterion_value = nn.MSELoss()
 optimizer = torch.optim.Adam(model.parameters(), lr=lr)
@@ -33,7 +33,7 @@ loader = DataLoader(
     batch_size=64,
     shuffle=True,
     num_workers=4,          # 并行读取数据
-    pin_memory=True,        # GPU 训练时加速 CPU -> GPU 拷贝
+    pin_memory=device.type == "cuda", # GPU 训练时加速 CPU -> GPU 拷贝
     persistent_workers=True # 多个 epoch 时复用 worker
 )
 
@@ -52,7 +52,7 @@ def train(epoch):
         value = value.to(device)
 
         optimizer.zero_grad()
-        pred_policy, pred_value = model(state)
+        pred_policy, pred_value, pred_score, pred_ownership = model(state)
         policy_loss = criterion_policy(pred_policy, policy)
         value_loss = criterion_value(pred_value, value)
         loss = policy_loss + value_weight * value_loss
