@@ -4,7 +4,7 @@ from sgfmill import boards
 import numpy as np
 import h5py
 
-folder = Path("./data/games/Agon") # 需要处理的sgf文件目录
+folder = Path("./data/games/Agon/01") # 需要处理的sgf文件目录
 save_path = Path("./data/supervised/Agon.h5")
 save_path.parent.mkdir(parents=True, exist_ok=True)
 board_size = 19
