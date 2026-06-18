@@ -1,53 +1,37 @@
-# 推理服务二进制协议
+# Python 推理服务二进制协议
 
-## 启动
+本文档面向 Go 调用方。协议只定义 `POST /predict` 的请求和响应格式。
 
-默认权重路径：
+## 基本约定
 
 ```text
-data/weights/agon_go_net.pt
+URL          : http://<host>:<port>/predict
+Content-Type : application/octet-stream
+数字格式      : float32
+字节序        : little-endian
+输入布局      : batch -> channel -> row -> col
 ```
 
-启动服务：
+所有数组都是连续的一维 float32 字节流。Go 端按 little-endian 写入和读取。
 
-```bash
-uv run uvicorn src.server:app --host 127.0.0.1 --port 8000
-```
+## 请求
 
-健康检查：
-
-```bash
-curl http://127.0.0.1:8000/health
-```
-
-返回：
-
-```json
-{"status":"ok"}
-```
-
-## POST /predict
-
-请求和响应都使用 raw binary float32，字节序为 little-endian。
-
-### 请求 Header
+Header：
 
 ```http
 Content-Type: application/octet-stream
 X-Batch-Size: <B>
 ```
 
-### 请求 Body
-
-Body 是连续的 little-endian float32 数组：
+Body 表示一个 batch 的局面：
 
 ```text
-shape  : [B, 9, 19, 19]
-layout : batch -> channel -> row -> col
-dtype  : float32 little-endian
+shape        : [B, 9, 19, 19]
+float32 数量 : B * 9 * 19 * 19
+byte 数量    : B * 9 * 19 * 19 * 4
 ```
 
-每个输入局面的 9 个通道：
+每个局面的 9 个通道：
 
 ```text
 0: 当前局面黑棋
@@ -61,15 +45,15 @@ dtype  : float32 little-endian
 8: 当前行动方，黑=1，白=0
 ```
 
-请求 body 长度：
+Go 端需要按以下索引写入：
 
 ```text
-B * 9 * 19 * 19 * 4 bytes
+idx = (((batch * 9 + channel) * 19 + row) * 19 + col)
 ```
 
-### 响应 Body
+## 响应
 
-响应也是连续的 little-endian float32 数组，按以下顺序拼接：
+响应 Body 是连续的 float32 字节流，按以下顺序拼接：
 
 ```text
 policy_probs      [B, 362]
@@ -78,32 +62,106 @@ score             [B]
 ownership_probs   [B, 2, 19, 19]
 ```
 
-每个 batch 元素对应的 float32 数量：
+每个 batch 元素返回：
 
 ```text
-362 + 1 + 1 + 2 * 19 * 19 = 1086
+362 + 1 + 1 + 2 * 19 * 19 = 1086 个 float32
 ```
 
-响应 body 长度：
+响应总长度：
 
 ```text
-B * 1086 * 4 bytes
+float32 数量 : B * 1086
+byte 数量    : B * 1086 * 4
 ```
 
-Go 端读取响应后按以下长度切片：
+Go 端读取成 `[]float32` 后按以下长度切片：
 
 ```text
-policy_len    = B * 362
-value_len     = B
-score_len     = B
-ownership_len = B * 2 * 19 * 19
+policyLen    = B * 362
+valueLen     = B
+scoreLen     = B
+ownershipLen = B * 2 * 19 * 19
 ```
 
 切片顺序：
 
 ```text
-policy_probs    = out[0 : policy_len]
-value           = out[policy_len : policy_len + value_len]
-score           = out[policy_len + value_len : policy_len + value_len + score_len]
-ownership_probs = out[policy_len + value_len + score_len : policy_len + value_len + score_len + ownership_len]
+policy    = out[0 : policyLen]
+value     = out[policyLen : policyLen + valueLen]
+score     = out[policyLen + valueLen : policyLen + valueLen + scoreLen]
+ownership = out[policyLen + valueLen + scoreLen : policyLen + valueLen + scoreLen + ownershipLen]
+```
+
+## Go 示例
+
+请求：
+
+```go
+states := make([]float32, batchSize*9*19*19)
+
+// 示例：写入某个点
+idx := (((b*9 + c) * 19 + row) * 19 + col)
+states[idx] = 1
+
+buf := new(bytes.Buffer)
+if err := binary.Write(buf, binary.LittleEndian, states); err != nil {
+    return err
+}
+
+req, err := http.NewRequest("POST", url, buf)
+if err != nil {
+    return err
+}
+req.Header.Set("Content-Type", "application/octet-stream")
+req.Header.Set("X-Batch-Size", strconv.Itoa(batchSize))
+
+resp, err := http.DefaultClient.Do(req)
+if err != nil {
+    return err
+}
+defer resp.Body.Close()
+```
+
+响应：
+
+```go
+if resp.StatusCode != http.StatusOK {
+    body, _ := io.ReadAll(resp.Body)
+    return fmt.Errorf("predict failed: status=%d body=%s", resp.StatusCode, body)
+}
+
+body, err := io.ReadAll(resp.Body)
+if err != nil {
+    return err
+}
+
+expectedBytes := batchSize * 1086 * 4
+if len(body) != expectedBytes {
+    return fmt.Errorf("invalid response size: got=%d expected=%d", len(body), expectedBytes)
+}
+
+out := make([]float32, len(body)/4)
+if err := binary.Read(bytes.NewReader(body), binary.LittleEndian, out); err != nil {
+    return err
+}
+
+policyLen := batchSize * 362
+valueLen := batchSize
+scoreLen := batchSize
+ownershipLen := batchSize * 2 * 19 * 19
+
+policy := out[:policyLen]
+value := out[policyLen : policyLen+valueLen]
+score := out[policyLen+valueLen : policyLen+valueLen+scoreLen]
+ownership := out[policyLen+valueLen+scoreLen : policyLen+valueLen+scoreLen+ownershipLen]
+```
+
+## 错误
+
+服务端会在以下情况返回 `400`：
+
+```text
+X-Batch-Size 缺失或小于等于 0
+请求 body 长度不是 B * 9 * 19 * 19 * 4
 ```
