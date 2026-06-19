@@ -1,167 +1,143 @@
-# Python 推理服务二进制协议
+# Python 推理服务协议
 
-本文档面向 Go 调用方。协议只定义 `POST /predict` 的请求和响应格式。
-
-## 基本约定
-
-```text
-URL          : http://<host>:<port>/predict
-Content-Type : application/octet-stream
-数字格式      : float32
-字节序        : little-endian
-输入布局      : batch -> channel -> row -> col
-```
-
-所有数组都是连续的一维 float32 字节流。Go 端按 little-endian 写入和读取。
+Go 端通过 `POST /predict` 批量调用 Python 模型。请求和响应均为 little-endian、连续排列的 `float32` 二进制数据。
 
 ## 请求
 
-Header：
-
 ```http
+POST /predict
 Content-Type: application/octet-stream
 X-Batch-Size: <B>
 ```
 
-Body 表示一个 batch 的局面：
+Body 布局为 NCHW：
 
 ```text
-shape        : [B, 9, 19, 19]
-float32 数量 : B * 9 * 19 * 19
-byte 数量    : B * 9 * 19 * 19 * 4
+shape : [B, 9, 19, 19]
+bytes : B * 9 * 19 * 19 * 4
 ```
 
-每个局面的 9 个通道：
+单个局面的通道：
 
 ```text
-0: 当前局面黑棋
-1: 当前局面白棋
-2: 前 1 个局面黑棋
-3: 前 1 个局面白棋
-4: 前 2 个局面黑棋
-5: 前 2 个局面白棋
-6: 前 3 个局面黑棋
-7: 前 3 个局面白棋
-8: 当前行动方，黑=1，白=0
+0,1 : 当前局面的黑棋、白棋
+2,3 : 前 1 个局面的黑棋、白棋
+4,5 : 前 2 个局面的黑棋、白棋
+6,7 : 前 3 个局面的黑棋、白棋
+8   : 当前行动方，黑=1，白=0（整张平面取相同值）
 ```
 
-Go 端需要按以下索引写入：
+元素索引：
 
 ```text
-idx = (((batch * 9 + channel) * 19 + row) * 19 + col)
+index = (((batch * 9 + channel) * 19 + row) * 19 + col)
 ```
 
 ## 响应
 
-响应 Body 是连续的 float32 字节流，按以下顺序拼接：
+响应采用 **head-major** 布局，不是逐样本布局：
 
 ```text
-policy_probs      [B, 362]
-value             [B]
-score             [B]
-ownership_probs   [B, 2, 19, 19]
+policy_probs    [B, 362]
+value           [B]
+score           [B]
+ownership_probs [B, 2, 19, 19]
 ```
 
-每个 batch 元素返回：
+各段依次展平后拼接：
 
 ```text
-362 + 1 + 1 + 2 * 19 * 19 = 1086 个 float32
+[全部 policy][全部 value][全部 score][全部 ownership]
 ```
 
-响应总长度：
+每个样本对应 `1086` 个值，响应总长度为：
 
 ```text
-float32 数量 : B * 1086
-byte 数量    : B * 1086 * 4
+floats : B * 1086
+bytes  : B * 1086 * 4
 ```
 
-Go 端读取成 `[]float32` 后按以下长度切片：
-
-```text
-policyLen    = B * 362
-valueLen     = B
-scoreLen     = B
-ownershipLen = B * 2 * 19 * 19
-```
-
-切片顺序：
-
-```text
-policy    = out[0 : policyLen]
-value     = out[policyLen : policyLen + valueLen]
-score     = out[policyLen + valueLen : policyLen + valueLen + scoreLen]
-ownership = out[policyLen + valueLen + scoreLen : policyLen + valueLen + scoreLen + ownershipLen]
-```
-
-## Go 示例
-
-请求：
+Go 端切片：
 
 ```go
-states := make([]float32, batchSize*9*19*19)
+policyEnd := batchSize * 362
+valueEnd := policyEnd + batchSize
+scoreEnd := valueEnd + batchSize
+ownershipEnd := scoreEnd + batchSize*2*19*19
 
-// 示例：写入某个点
-idx := (((b*9 + c) * 19 + row) * 19 + col)
-states[idx] = 1
-
-buf := new(bytes.Buffer)
-if err := binary.Write(buf, binary.LittleEndian, states); err != nil {
-    return err
-}
-
-req, err := http.NewRequest("POST", url, buf)
-if err != nil {
-    return err
-}
-req.Header.Set("Content-Type", "application/octet-stream")
-req.Header.Set("X-Batch-Size", strconv.Itoa(batchSize))
-
-resp, err := http.DefaultClient.Do(req)
-if err != nil {
-    return err
-}
-defer resp.Body.Close()
+policy := out[:policyEnd]
+value := out[policyEnd:valueEnd]
+score := out[valueEnd:scoreEnd]
+ownership := out[scoreEnd:ownershipEnd]
 ```
 
-响应：
+第 `i` 个样本的数据：
 
 ```go
-if resp.StatusCode != http.StatusOK {
-    body, _ := io.ReadAll(resp.Body)
-    return fmt.Errorf("predict failed: status=%d body=%s", resp.StatusCode, body)
-}
-
-body, err := io.ReadAll(resp.Body)
-if err != nil {
-    return err
-}
-
-expectedBytes := batchSize * 1086 * 4
-if len(body) != expectedBytes {
-    return fmt.Errorf("invalid response size: got=%d expected=%d", len(body), expectedBytes)
-}
-
-out := make([]float32, len(body)/4)
-if err := binary.Read(bytes.NewReader(body), binary.LittleEndian, out); err != nil {
-    return err
-}
-
-policyLen := batchSize * 362
-valueLen := batchSize
-scoreLen := batchSize
-ownershipLen := batchSize * 2 * 19 * 19
-
-policy := out[:policyLen]
-value := out[policyLen : policyLen+valueLen]
-score := out[policyLen+valueLen : policyLen+valueLen+scoreLen]
-ownership := out[policyLen+valueLen+scoreLen : policyLen+valueLen+scoreLen+ownershipLen]
+samplePolicy := policy[i*362 : (i+1)*362]
+sampleValue := value[i]
+sampleScore := score[i]
+sampleOwnership := ownership[i*2*19*19 : (i+1)*2*19*19]
 ```
 
-## 错误
+## 输出语义
 
-服务端会在以下情况返回 `400`：
+### Policy
+
+`policy_probs` 是对 362 个动作执行 softmax 后的概率：
 
 ```text
-X-Batch-Size 缺失或小于等于 0
-请求 body 长度不是 B * 9 * 19 * 19 * 4
+0..360 : row * 19 + col
+361    : pass
+```
+
+概率包含非法动作。Go 端应屏蔽非法动作，然后对剩余概率重新归一化。
+
+### Value
+
+`value` 表示当前行动方的预测胜负，范围为 `[-1, 1]`：
+
+```text
+正数：当前行动方占优
+负数：当前行动方不利
+```
+
+### Score
+
+`score` 表示当前行动方视角的预测终局目差：
+
+```text
+正数：当前行动方领先
+负数：当前行动方落后
+```
+
+训练标签由自博弈终局结果生成。
+
+### Ownership
+
+`ownership_probs` 是每个点的黑白归属概率：
+
+```text
+channel 0 : 黑
+channel 1 : 白
+```
+
+通道固定为黑白视角，不随当前行动方交换。两个通道经过 softmax，不包含中立或未知通道。
+
+训练标签由自博弈终局归属生成；未知点不参与 ownership loss。
+
+## 错误处理
+
+以下情况返回 `400`：
+
+```text
+X-Batch-Size 缺失、无效或小于等于 0
+Body 长度不等于 B * 9 * 19 * 19 * 4
+```
+
+Go 端还应检查：
+
+```text
+HTTP 状态码为 200
+响应长度等于 B * 1086 * 4
 ```

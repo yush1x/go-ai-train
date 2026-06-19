@@ -14,10 +14,10 @@ batch_size * 9 * 19 * 19
 
 **输出**：
 
-模型采用多任务学习结构，共享 ResNet 主干，并通过 policy、value、score、ownership 等输出头联合训练；其中 score 和 ownership 在自博弈阶段作为辅助监督信号，帮助模型学习目数和地盘信息。
+模型采用多任务学习结构，共享 ResNet 主干，并包含 policy、value、score、ownership 四个输出头。
 
 ```text
-policy     : [B, 362]，361 个棋盘点 + pass 的 logits / 概率
+policy     : [B, 362]，361 个棋盘点 + pass，对 logits 执行 softmax 后的概率
 value      : [B, 1]，当前先手最终赢/输，范围 [-1, 1]
 score      : [B, 1]，当前先手最终赢/输多少目
 ownership : [B, 2, 19, 19]，每个点输出黑/白两类 logits；label 为 [B, 19, 19]，0=黑，1=白，-1=未知。未知点使用 ignore_index=-1，不参与 ownership loss。
@@ -48,11 +48,13 @@ value      : [1]，当前先手视角的终局胜负，1=赢，-1=输
 1. policy 只记录棋手实际落子的类别标签，但同一局面可能有多个合理落点；
 2. 数据集中无 pass 样本，监督学习后被训练成 0；
 
-score/ownership 在此阶段不会参与训练
+监督学习阶段只训练 policy/value。
 
 ### 2. 自博弈训练
 
 自博弈使用当前 CNN + MCTS 生成棋局。CNN 给 MCTS 提供 policy/value/score/ownership，MCTS 搜索后选择落子，并把搜索结果作为新训练数据。
+
+自博弈阶段联合训练 policy/value/score/ownership。
 
 自博弈样本：
 

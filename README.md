@@ -12,6 +12,7 @@ src/model.py       ResNet 四头模型
 src/train.py       监督训练入口
 src/inference.py   numpy 输入输出的推理封装
 src/server.py      FastAPI 二进制推理服务
+src/selfplay_storage.py  自博弈训练数据解码与 HDF5 追加
 docs/              接口协议文档
 ```
 
@@ -23,6 +24,7 @@ docs/              接口协议文档
 ```text
 docs/overview.md             项目整体概况
 docs/inference_protocol.md   推理服务二进制协议
+docs/storage.md              自博弈训练数据提交协议
 ```
 
 ## 启动推理服务

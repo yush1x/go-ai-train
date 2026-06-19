@@ -1,14 +1,18 @@
 from pathlib import Path
+import logging
 import sys
 
 import numpy as np
 from fastapi import FastAPI, Header, HTTPException, Request, Response
+from fastapi.responses import JSONResponse
+from starlette.concurrency import run_in_threadpool
 
 SRC_DIR = Path(__file__).resolve().parent
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from inference import GoInference
+from selfplay_storage import SelfPlayDataError, SelfPlayStorage, decode_game
 
 
 BOARD_SIZE = 19
@@ -18,10 +22,19 @@ OWNERSHIP_CHANNELS = 2
 FLOAT32 = np.dtype("<f4")
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-WEIGHTS_PATH = PROJECT_ROOT / "data/weights/agon_go_net.pt"
+WEIGHTS_PATH = PROJECT_ROOT / "data/weights/agon_go_net.pt"  # 配置模型参数
+SELFPLAY_PATH = PROJECT_ROOT / "data/selfplay/selfplay.h5"   # 数据保存位置
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI()
 infer = GoInference(WEIGHTS_PATH)
+selfplay_storage = SelfPlayStorage(SELFPLAY_PATH)
+
+
+def decode_and_save_selfplay(body: bytes, sample_count: int) -> None:
+    game = decode_game(body, sample_count)
+    selfplay_storage.append(game)
 
 
 @app.get("/health")
@@ -62,3 +75,42 @@ async def predict(request: Request, x_batch_size: int = Header(alias="X-Batch-Si
         content=response_values.tobytes(),
         media_type="application/octet-stream",
     )
+
+
+@app.post("/selfplay/game")
+async def save_selfplay_game(
+    request: Request,
+    x_sample_count: str | None = Header(default=None, alias="X-Sample-Count"),
+):
+    try:
+        if x_sample_count is None:
+            raise SelfPlayDataError(
+                "invalid_sample_count",
+                "X-Sample-Count is required",
+            )
+        try:
+            sample_count = int(x_sample_count)
+        except ValueError as exc:
+            raise SelfPlayDataError(
+                "invalid_sample_count",
+                "X-Sample-Count must be an integer",
+            ) from exc
+
+        body = await request.body()
+        await run_in_threadpool(decode_and_save_selfplay, body, sample_count)
+    except SelfPlayDataError as exc:
+        return JSONResponse(
+            status_code=400,
+            content={"error": exc.code, "message": exc.message},
+        )
+    except Exception:
+        logger.exception("failed to save selfplay data")
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": "storage_failure",
+                "message": "failed to save selfplay data",
+            },
+        )
+
+    return {"samples": sample_count, "status": "written"}
