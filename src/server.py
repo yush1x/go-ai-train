@@ -22,14 +22,29 @@ OWNERSHIP_CHANNELS = 2
 FLOAT32 = np.dtype("<f4")
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-WEIGHTS_PATH = PROJECT_ROOT / "data/weights/go_net.pt"  # 配置模型参数
+
+# 模型权重配置。服务启动时会全部加载，/predict/a 和 /predict/b 分别使用对应模型。
+MODEL_WEIGHTS = {
+    "a": PROJECT_ROOT / "data/weights/go_net.pt",
+    "b": PROJECT_ROOT / "data/weights/go_net.pt",
+}
+DEFAULT_MODEL = "a"
+
 SELFPLAY_PATH = PROJECT_ROOT / "data/selfplay/selfplay.h5"   # 数据保存位置
 
 logger = logging.getLogger(__name__)
 
 app = FastAPI()
-infer = GoInference(WEIGHTS_PATH)
+inferencers: dict[str, GoInference] = {}
 selfplay_storage = SelfPlayStorage(SELFPLAY_PATH)
+
+
+def load_models() -> None:
+    if inferencers:
+        return
+
+    for model_name, weights_path in MODEL_WEIGHTS.items():
+        inferencers[model_name] = GoInference(weights_path)
 
 
 def decode_and_save_selfplay(body: bytes, sample_count: int) -> None:
@@ -37,18 +52,44 @@ def decode_and_save_selfplay(body: bytes, sample_count: int) -> None:
     selfplay_storage.append(game)
 
 
+def parse_batch_size(x_batch_size: str | None) -> int:
+    if x_batch_size is None:
+        raise HTTPException(status_code=400, detail="X-Batch-Size is required")
+    try:
+        batch_size = int(x_batch_size)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="X-Batch-Size must be an integer",
+        ) from exc
+    if batch_size <= 0:
+        raise HTTPException(status_code=400, detail="X-Batch-Size must be positive")
+    return batch_size
+
+
+@app.on_event("startup")
+def startup() -> None:
+    load_models()
+
+
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    return {"status": "ok", "models": sorted(MODEL_WEIGHTS)}
 
 
-@app.post("/predict")
-async def predict(request: Request, x_batch_size: int = Header(alias="X-Batch-Size")):
-    if x_batch_size <= 0:
-        raise HTTPException(status_code=400, detail="X-Batch-Size must be positive")
+async def predict_with_model(
+    model_name: str,
+    request: Request,
+    x_batch_size: str | None,
+) -> Response:
+    if model_name not in MODEL_WEIGHTS:
+        raise HTTPException(status_code=404, detail="unknown model")
+    batch_size = parse_batch_size(x_batch_size)
+    if model_name not in inferencers:
+        raise HTTPException(status_code=503, detail="model is not loaded")
 
     body = await request.body()
-    expected_values = x_batch_size * STATE_CHANNELS * BOARD_SIZE * BOARD_SIZE
+    expected_values = batch_size * STATE_CHANNELS * BOARD_SIZE * BOARD_SIZE
     expected_bytes = expected_values * FLOAT32.itemsize
     if len(body) != expected_bytes:
         raise HTTPException(
@@ -57,12 +98,12 @@ async def predict(request: Request, x_batch_size: int = Header(alias="X-Batch-Si
         )
 
     states = np.frombuffer(body, dtype=FLOAT32).copy().reshape(
-        x_batch_size,
+        batch_size,
         STATE_CHANNELS,
         BOARD_SIZE,
         BOARD_SIZE,
     )
-    outputs = infer.predict(states)
+    outputs = inferencers[model_name].predict(states)
 
     response_values = np.concatenate([
         outputs["policy_probs"].reshape(-1),
@@ -75,6 +116,23 @@ async def predict(request: Request, x_batch_size: int = Header(alias="X-Batch-Si
         content=response_values.tobytes(),
         media_type="application/octet-stream",
     )
+
+
+@app.post("/predict/{model_name}")
+async def predict(
+    model_name: str,
+    request: Request,
+    x_batch_size: str | None = Header(default=None, alias="X-Batch-Size"),
+):
+    return await predict_with_model(model_name, request, x_batch_size)
+
+
+@app.post("/predict")
+async def predict_default(
+    request: Request,
+    x_batch_size: str | None = Header(default=None, alias="X-Batch-Size"),
+):
+    return await predict_with_model(DEFAULT_MODEL, request, x_batch_size)
 
 
 @app.post("/selfplay/game")

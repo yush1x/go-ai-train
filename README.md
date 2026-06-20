@@ -30,7 +30,7 @@ docs/storage.md              自博弈训练数据提交协议
 
 ## 启动推理服务
 
-推理服务加载的权重路径在 `src/server.py` 的 `WEIGHTS_PATH` 中配置。
+推理服务加载的权重路径在 `src/server.py` 顶部的 `MODEL_WEIGHTS` 中配置。服务会加载 `a`、`b` 两个模型，`/predict` 使用默认模型，`/predict/a` 和 `/predict/b` 可指定模型。
 
 ```bash
 uv run uvicorn src.server:app --host 127.0.0.1 --port 8000
