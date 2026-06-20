@@ -22,7 +22,7 @@ OWNERSHIP_CHANNELS = 2
 FLOAT32 = np.dtype("<f4")
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-WEIGHTS_PATH = PROJECT_ROOT / "data/weights/agon_go_net.pt"  # 配置模型参数
+WEIGHTS_PATH = PROJECT_ROOT / "data/weights/go_net.pt"  # 配置模型参数
 SELFPLAY_PATH = PROJECT_ROOT / "data/selfplay/selfplay.h5"   # 数据保存位置
 
 logger = logging.getLogger(__name__)

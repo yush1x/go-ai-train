@@ -22,3 +22,27 @@ class TrainDataset(Dataset):
         value = torch.tensor(self.f["value"][idx]).float()
 
         return state, policy, value
+
+
+class SelfPlayDataset(Dataset):
+    def __init__(self, h5_path):
+        self.h5_path = h5_path
+        self.f = None
+
+        with h5py.File(self.h5_path, "r") as f:
+            self.length = f["features"].shape[0]
+
+    def __len__(self):
+        return self.length
+
+    def __getitem__(self, idx):
+        if self.f is None:
+            self.f = h5py.File(self.h5_path, "r")
+
+        features = torch.from_numpy(self.f["features"][idx]).float()
+        policy = torch.from_numpy(self.f["policy"][idx]).float()
+        value = torch.tensor(self.f["value"][idx]).float()
+        score = torch.tensor(self.f["score"][idx]).float()
+        ownership = torch.from_numpy(self.f["ownership"][idx]).long()
+
+        return features, policy, value, score, ownership

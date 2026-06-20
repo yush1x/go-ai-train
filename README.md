@@ -10,6 +10,7 @@ src/processor.py   SGF 转监督训练数据
 src/dataset.py     H5 训练数据读取
 src/model.py       ResNet 四头模型
 src/train.py       监督训练入口
+src/train_selfplay.py  自博弈训练入口
 src/inference.py   numpy 输入输出的推理封装
 src/server.py      FastAPI 二进制推理服务
 src/selfplay_storage.py  自博弈训练数据解码与 HDF5 追加
