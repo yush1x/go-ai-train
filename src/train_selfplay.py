@@ -10,7 +10,9 @@ from model import GoNet
 
 num_epochs = 1
 lr = 2e-4
-h5_path = Path("./data/selfplay/selfplay.h5")
+selfplay_h5_paths = [
+    Path("./data/selfplay/selfplay.h5"),
+]
 initial_weights_path = Path("./data/weights/agon_go_net.pt")
 weights_path = Path("./data/weights/selfplay_go_net.pt")
 log_interval = 100
@@ -39,7 +41,13 @@ criterion_score = nn.SmoothL1Loss()
 criterion_ownership = nn.CrossEntropyLoss(ignore_index=-1)
 optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
-dataset = SelfPlayDataset(h5_path)
+if not selfplay_h5_paths:
+    raise ValueError("selfplay_h5_paths must contain at least one h5 file")
+print("using selfplay h5 files:")
+for path in selfplay_h5_paths:
+    print(f"  {path}")
+
+dataset = SelfPlayDataset(selfplay_h5_paths)
 loader = DataLoader(
     dataset,
     batch_size=batch_size,
