@@ -25,12 +25,12 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 # 模型权重配置。服务启动时会全部加载，/predict/a 和 /predict/b 分别使用对应模型。
 MODEL_WEIGHTS = {
-    "a": PROJECT_ROOT / "data/weights/go_net.pt",
-    "b": PROJECT_ROOT / "data/weights/go_net.pt",
+    "a": PROJECT_ROOT / "data/weights/s.pt",
+    "b": PROJECT_ROOT / "data/weights/s.pt",
 }
 DEFAULT_MODEL = "a"
 
-SELFPLAY_PATH = PROJECT_ROOT / "data/selfplay/selfplay.h5"   # 数据保存位置
+SELFPLAY_PATH = PROJECT_ROOT / "data/selfplay/d.h5"   # 数据保存位置
 
 logger = logging.getLogger(__name__)
 

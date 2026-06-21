@@ -20,7 +20,7 @@ log_interval = 100
 batch_size = 64
 value_weight = 1.0
 score_weight = 0.1
-ownership_weight = 1.0
+ownership_weight = 0.2
 
 
 if torch.cuda.is_available():
